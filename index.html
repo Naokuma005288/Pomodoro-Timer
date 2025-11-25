@@ -1,0 +1,805 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>Pomodoro Focus Timer Light</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <style>
+    :root {
+      --accent-focus: #0ea5e9;   /* sky-500 */
+      --accent-break-short: #22c55e; /* emerald-500 */
+      --accent-break-long: #f97316;  /* orange-500 */
+      --ring-base: #e5e7eb;
+    }
+
+    body {
+      background: radial-gradient(circle at top, #f1f5f9 0, #e5e7eb 35%, #f9fafb 100%);
+    }
+
+    /* 毎秒ポコッと弾む */
+    @keyframes tick-pop {
+      0%   { transform: scale(1); }
+      25%  { transform: scale(1.04); }
+      100% { transform: scale(1); }
+    }
+    .tick-pop {
+      animation: tick-pop 0.25s ease-out;
+    }
+
+    /* モード切り替え時フェード */
+    @keyframes mode-fade {
+      0%   { opacity: 0; transform: translateY(6px); }
+      100% { opacity: 1; transform: translateY(0); }
+    }
+    .mode-fade {
+      animation: mode-fade 0.3s ease-out;
+    }
+
+    /* うっすら動くグリッド背景 */
+    .bg-grid {
+      position: absolute;
+      inset: -1px;
+      background-image:
+        linear-gradient(to right, rgba(148,163,184,0.16) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(148,163,184,0.16) 1px, transparent 1px);
+      background-size: 24px 24px;
+      mask-image: radial-gradient(circle at center, black 0, transparent 70%);
+      opacity: 0.55;
+      pointer-events: none;
+      animation: grid-move 26s linear infinite;
+    }
+    @keyframes grid-move {
+      0%   { background-position: 0 0, 0 0; }
+      100% { background-position: 48px 48px, 48px 48px; }
+    }
+
+    /* カード内の淡い光 */
+    .animated-glow {
+      animation: bg-glow 22s ease-in-out infinite;
+    }
+    @keyframes bg-glow {
+      0%   { opacity: 0.35; transform: translate3d(0,0,0) scale(1); }
+      50%  { opacity: 0.75; transform: translate3d(10px, -6px, 0) scale(1.03); }
+      100% { opacity: 0.35; transform: translate3d(0,0,0) scale(1); }
+    }
+
+    /* タイマーリング */
+    #progressRing {
+      box-shadow: 0 0 0 0 rgba(148,163,184,0.2);
+      transition:
+        box-shadow 0.35s ease-out,
+        transform 0.25s ease-out,
+        background 0.4s linear;
+    }
+    #progressRing.is-running {
+      animation: ring-pulse 1.4s ease-out infinite;
+      transform: translateY(-1px);
+    }
+    @keyframes ring-pulse {
+      0%   { box-shadow: 0 0 0 0 rgba(14,165,233,0.1); }
+      50%  { box-shadow: 0 0 32px 10px rgba(14,165,233,0.35); }
+      100% { box-shadow: 0 0 0 0 rgba(14,165,233,0.1); }
+    }
+
+    /* ボタン共通アニメーション */
+    button {
+      transition:
+        transform 0.16s ease-out,
+        box-shadow 0.18s ease-out,
+        background-color 0.16s ease-out,
+        border-color 0.16s ease-out,
+        opacity 0.16s ease-out;
+    }
+    button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 8px 24px rgba(15,23,42,0.16);
+    }
+    button:active {
+      transform: translateY(0);
+      box-shadow: 0 4px 14px rgba(15,23,42,0.18);
+    }
+  </style>
+</head>
+<body class="min-h-screen text-slate-900 flex items-center justify-center">
+  <div class="w-full max-w-3xl mx-4 my-8 relative">
+    <!-- 背景グリッド -->
+    <div class="bg-grid"></div>
+
+    <div class="relative bg-white/90 border border-slate-200 rounded-3xl shadow-[0_26px_70px_rgba(15,23,42,0.14)] backdrop-blur-xl p-6 md:p-8 overflow-hidden">
+      <!-- ぼんやりした色のにじみ -->
+      <div class="pointer-events-none absolute -inset-16 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.16),transparent_60%),radial-gradient(circle_at_bottom,_rgba(248,113,113,0.18),transparent_60%)] opacity-80 animated-glow"></div>
+
+      <div class="relative space-y-5 md:space-y-6">
+        <!-- Header -->
+        <header class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+          <div class="space-y-2">
+            <h1 class="text-2xl md:text-3xl font-bold tracking-tight">
+              Pomodoro Focus Timer<span class="text-sky-500"> Light</span>
+            </h1>
+            <p class="text-xs md:text-sm text-slate-600 leading-relaxed">
+              <span class="font-semibold text-slate-800">集中</span>・
+              <span class="font-semibold text-slate-800">小休憩</span>・
+              <span class="font-semibold text-slate-800">長休憩</span> を色で分けて表示。<br class="md:hidden" />
+              「今なにモードなのか」が一目でわかるライトテーマ版。
+            </p>
+
+            <!-- タスク入力 -->
+            <div class="flex items-center gap-2 text-xs md:text-sm">
+              <span class="px-2 py-1 rounded-full bg-slate-100 border border-slate-200 text-slate-700">
+                今やること
+              </span>
+              <input id="taskInput"
+                     type="text"
+                     maxlength="40"
+                     placeholder="例: 数学のワーク / 英単語50個 / コード修正"
+                     class="flex-1 bg-white/80 border border-slate-300 rounded-2xl px-3 py-1.5 text-xs md:text-sm focus:outline-none focus:ring-2 focus:ring-sky-400/80 placeholder:text-slate-400" />
+            </div>
+            <p id="taskCurrentLabel" class="text-[11px] text-slate-500">
+              現在のタスク：未設定
+            </p>
+          </div>
+
+          <div class="flex flex-col items-end gap-2 text-right">
+            <span id="modeChip"
+                  class="inline-flex items-center gap-1.5 text-[11px] px-3 py-1.5 rounded-full bg-slate-100 border border-slate-300">
+              <span class="w-2 h-2 rounded-full bg-sky-400 animate-pulse"></span>
+              <span id="modeChipLabel" class="font-medium text-slate-700">集中モード</span>
+            </span>
+            <p id="nextLabel" class="text-[11px] text-slate-500">
+              次：短い休憩（5分）
+            </p>
+
+            <!-- デイリー目標 -->
+            <div class="mt-1 flex flex-col items-end gap-1 text-[11px] text-slate-700">
+              <div class="flex items-center gap-1.5">
+                <span>今日の目標</span>
+                <input id="dailyTargetInput"
+                       type="number"
+                       min="1"
+                       max="20"
+                       value="8"
+                       class="w-14 bg-white border border-slate-300 rounded-xl px-2 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-sky-400/80" />
+                <span>ポモドーロ</span>
+              </div>
+              <div class="w-40 h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                <div id="dailyProgressFill"
+                     class="h-full w-0 bg-gradient-to-r from-sky-400 via-emerald-400 to-amber-400 transition-all duration-500"></div>
+              </div>
+              <span id="dailyProgressText" class="text-[10px] text-slate-500">
+                0 / 8 達成
+              </span>
+            </div>
+          </div>
+        </header>
+
+        <!-- Mode Tabs -->
+        <section class="mode-fade">
+          <div class="grid grid-cols-3 gap-2 text-xs md:text-sm">
+            <button
+              class="mode-tab px-3 py-2.5 rounded-2xl border bg-sky-50 border-sky-300 shadow-[0_0_12px_rgba(56,189,248,0.25)] flex flex-col items-start justify-center gap-0.5 transition"
+              data-mode="pomodoro">
+              <span class="font-semibold text-slate-800">ポモドーロ</span>
+              <span class="text-[11px] text-sky-700 flex items-center gap-1">
+                <span>集中</span><span>🔵</span>
+              </span>
+            </button>
+            <button
+              class="mode-tab px-3 py-2.5 rounded-2xl border bg-white border-slate-200 flex flex-col items-start justify-center gap-0.5 transition"
+              data-mode="short">
+              <span class="font-semibold text-slate-800">短い休憩</span>
+              <span class="text-[11px] text-emerald-700 flex items-center gap-1">
+                <span>リフレッシュ</span><span>☕</span>
+              </span>
+            </button>
+            <button
+              class="mode-tab px-3 py-2.5 rounded-2xl border bg-white border-slate-200 flex flex-col items-start justify-center gap-0.5 transition"
+              data-mode="long">
+              <span class="font-semibold text-slate-800">長い休憩</span>
+              <span class="text-[11px] text-orange-700 flex items-center gap-1">
+                <span>しっかり休む</span><span>🛏</span>
+              </span>
+            </button>
+          </div>
+        </section>
+
+        <!-- Timer & progress -->
+        <section class="flex flex-col md:flex-row md:items-center md:justify-between gap-5 md:gap-6">
+          <!-- Timer circle -->
+          <div class="flex-1 flex flex-col items-center gap-3">
+            <div class="text-xs text-slate-500 mb-1">
+              残り時間
+            </div>
+
+            <div id="progressRing"
+                 class="relative w-56 h-56 md:w-64 md:h-64 rounded-full flex items-center justify-center transition-all duration-300 bg-[conic-gradient(#0ea5e9_0deg,var(--ring-base)_0deg)] border border-slate-200 overflow-hidden">
+              <!-- 内側の円 -->
+              <div class="absolute inset-[13%] rounded-full bg-white border border-slate-200 shadow-inner"></div>
+
+              <!-- 中央の時間表示 -->
+              <div class="relative flex flex-col items-center justify-center">
+                <div id="timerText"
+                     class="font-mono text-5xl md:text-6xl font-semibold tracking-tight tabular-nums select-none text-slate-900">
+                  25:00
+                </div>
+                <div id="statusText"
+                     class="mt-3 text-xs md:text-sm text-slate-600 text-center">
+                  ポモドーロの準備OK
+                </div>
+              </div>
+            </div>
+
+            <!-- 下の進捗バー（視覚的に残りが分かるように） -->
+            <div class="w-full max-w-xs mt-3">
+              <div class="flex items-center justify-between text-[11px] text-slate-500 mb-1">
+                <span>進行状況</span>
+                <span id="progressPercentLabel">0%</span>
+              </div>
+              <div class="w-full h-2 bg-slate-200 rounded-full overflow-hidden">
+                <div id="linearProgress"
+                     class="h-full w-0 bg-gradient-to-r from-sky-400 via-emerald-400 to-amber-400 transition-all duration-300 ease-out"></div>
+              </div>
+            </div>
+
+            <!-- セッションカウンター -->
+            <div class="mt-3 text-xs md:text-sm text-slate-600 flex flex-col items-center gap-1.5">
+              <span id="sessionsLabel">今日のポモドーロ：0回</span>
+              <div id="sessionDots" class="flex gap-1.5 flex-wrap justify-center">
+                <!-- JSで丸を追加 -->
+              </div>
+            </div>
+          </div>
+
+          <!-- Controls & options -->
+          <div class="flex-1 space-y-4">
+            <!-- Controls -->
+            <div class="flex flex-col gap-2">
+              <div class="flex flex-col md:flex-row gap-2">
+                <button id="startPauseBtn"
+                        class="flex-1 inline-flex items-center justify-center gap-2 px-4 py-3 rounded-2xl bg-sky-500 hover:bg-sky-400 text-white font-semibold text-sm md:text-base transition">
+                  ▶ 開始
+                </button>
+                <button id="resetBtn"
+                        class="flex-1 inline-flex items-center justify-center gap-2 px-4 py-3 rounded-2xl bg-white hover:bg-slate-50 text-slate-800 text-xs md:text-sm font-medium border border-slate-300 transition">
+                  リセット
+                </button>
+              </div>
+              <button id="skipBtn"
+                      class="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl bg-slate-50 hover:bg-slate-100 text-slate-800 text-xs md:text-sm font-medium border border-slate-300 transition">
+                ⏭ 今のセッションをスキップ
+              </button>
+            </div>
+
+            <!-- Options -->
+            <div class="text-[11px] md:text-xs text-slate-700 space-y-3 border border-slate-200 rounded-2xl p-3 bg-slate-50/80">
+              <div class="flex items-center justify-between gap-2">
+                <label class="flex items-center gap-2">
+                  <input id="soundToggle" type="checkbox" class="accent-sky-500" checked />
+                  <span>終了時にビープ音を鳴らす</span>
+                </label>
+                <label class="flex items-center gap-2">
+                  <input id="autoStartToggle" type="checkbox" class="accent-sky-500" />
+                  <span>自動で次のセッションを開始</span>
+                </label>
+              </div>
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-slate-500">
+                  ショートカット：
+                  <span class="text-slate-700">Space</span> 開始/一時停止、
+                  <span class="text-slate-700">R</span> リセット
+                </span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Settings -->
+        <section class="space-y-4 text-xs md:text-sm text-slate-700 border border-slate-200 rounded-2xl p-3 md:p-4 bg-slate-50/80">
+          <div class="flex items-center justify-between gap-3">
+            <h2 class="font-semibold text-sm md:text-base">タイマー設定（分・秒対応）</h2>
+            <button id="applySettingsBtn"
+                    class="px-3 py-1.5 rounded-xl bg-white hover:bg-slate-50 border border-slate-300 text-[11px] md:text-xs">
+              設定を反映
+            </button>
+          </div>
+
+          <div class="space-y-3">
+            <!-- Pomodoro -->
+            <div class="flex items-center justify-between gap-3">
+              <span class="w-24 md:w-28 font-medium text-slate-800">ポモドーロ</span>
+              <div class="flex items-center gap-1.5">
+                <input id="pomodoroMin" type="number" min="0" max="600" value="25"
+                       class="w-16 bg-white border border-slate-300 rounded-xl px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-sky-400/80" />
+                <span class="text-[11px] text-slate-500">分</span>
+                <input id="pomodoroSec" type="number" min="0" max="59" value="0"
+                       class="w-16 bg-white border border-slate-300 rounded-xl px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-sky-400/80" />
+                <span class="text-[11px] text-slate-500">秒</span>
+              </div>
+            </div>
+
+            <!-- Short break -->
+            <div class="flex items-center justify-between gap-3">
+              <span class="w-24 md:w-28 font-medium text-slate-800">短い休憩</span>
+              <div class="flex items-center gap-1.5">
+                <input id="shortMin" type="number" min="0" max="600" value="5"
+                       class="w-16 bg-white border border-slate-300 rounded-xl px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-sky-400/80" />
+                <span class="text-[11px] text-slate-500">分</span>
+                <input id="shortSec" type="number" min="0" max="59" value="0"
+                       class="w-16 bg-white border border-slate-300 rounded-xl px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-sky-400/80" />
+                <span class="text-[11px] text-slate-500">秒</span>
+              </div>
+            </div>
+
+            <!-- Long break -->
+            <div class="flex items-center justify-between gap-3">
+              <span class="w-24 md:w-28 font-medium text-slate-800">長い休憩</span>
+              <div class="flex items-center gap-1.5">
+                <input id="longMin" type="number" min="0" max="600" value="15"
+                       class="w-16 bg-white border border-slate-300 rounded-xl px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-sky-400/80" />
+                <span class="text-[11px] text-slate-500">分</span>
+                <input id="longSec" type="number" min="0" max="59" value="0"
+                       class="w-16 bg-white border border-slate-300 rounded-xl px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-sky-400/80" />
+                <span class="text-[11px] text-slate-500">秒</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3 pt-2 border-t border-slate-200">
+            <div class="flex items-center gap-2">
+              <span class="text-slate-700">長い休憩に入るタイミング</span>
+              <div class="flex items-center gap-1.5">
+                <input id="longIntervalInput" type="number" min="1" max="12" value="4"
+                       class="w-16 bg-white border border-slate-300 rounded-xl px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-sky-400/80" />
+                <span class="text-[11px] text-slate-500">ポモドーロごと</span>
+              </div>
+            </div>
+            <p id="infoHint" class="text-[11px] text-slate-500">
+              長い休憩：ポモドーロ4回ごと
+            </p>
+          </div>
+        </section>
+
+        <footer class="pt-1 text-[11px] text-slate-500 text-center">
+          ポモドーロ・テクニック：
+          <span class="text-slate-700">「短い集中 × 休憩」を繰り返して、集中力を長持ちさせる方法。</span>
+        </footer>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ===== モード設定 =====
+    const modeConfig = {
+      pomodoro: {
+        key: "pomodoro",
+        name: "ポモドーロ",
+        chipText: "集中モード",
+        runningText: "集中タイム中",
+        idleText: "ポモドーロの準備OK",
+        color: "var(--accent-focus)"
+      },
+      short: {
+        key: "short",
+        name: "短い休憩",
+        chipText: "休憩モード",
+        runningText: "短い休憩中",
+        idleText: "短い休憩の準備OK",
+        color: "var(--accent-break-short)"
+      },
+      long: {
+        key: "long",
+        name: "長い休憩",
+        chipText: "休憩モード",
+        runningText: "長い休憩中",
+        idleText: "長い休憩の準備OK",
+        color: "var(--accent-break-long)"
+      }
+    };
+
+    // ===== 状態変数 =====
+    let durations = {
+      pomodoro: 25 * 60,
+      short: 5 * 60,
+      long: 15 * 60
+    };
+
+    let currentModeKey = "pomodoro";
+    let totalSeconds = durations[currentModeKey];
+    let remainingSeconds = totalSeconds;
+    let isRunning = false;
+    let timerId = null;
+    let completedPomodoros = 0;
+    let longBreakInterval = 4;
+    let dailyTarget = 8;
+
+    // ===== DOM =====
+    const timerTextEl        = document.getElementById("timerText");
+    const statusTextEl       = document.getElementById("statusText");
+    const progressRingEl     = document.getElementById("progressRing");
+    const linearProgressEl   = document.getElementById("linearProgress");
+    const progressPercentEl  = document.getElementById("progressPercentLabel");
+    const startPauseBtn      = document.getElementById("startPauseBtn");
+    const resetBtn           = document.getElementById("resetBtn");
+    const skipBtn            = document.getElementById("skipBtn");
+    const modeTabs           = document.querySelectorAll(".mode-tab");
+    const modeChipLabelEl    = document.getElementById("modeChipLabel");
+    const nextLabelEl        = document.getElementById("nextLabel");
+    const sessionDotsEl      = document.getElementById("sessionDots");
+    const sessionsLabelEl    = document.getElementById("sessionsLabel");
+    const applySettingsBtn   = document.getElementById("applySettingsBtn");
+    const soundToggle        = document.getElementById("soundToggle");
+    const autoStartToggle    = document.getElementById("autoStartToggle");
+    const infoHintEl         = document.getElementById("infoHint");
+    const dailyTargetInput   = document.getElementById("dailyTargetInput");
+    const dailyProgressFill  = document.getElementById("dailyProgressFill");
+    const dailyProgressText  = document.getElementById("dailyProgressText");
+    const taskInput          = document.getElementById("taskInput");
+    const taskCurrentLabel   = document.getElementById("taskCurrentLabel");
+
+    // 設定 input
+    const pomodoroMinInput   = document.getElementById("pomodoroMin");
+    const pomodoroSecInput   = document.getElementById("pomodoroSec");
+    const shortMinInput      = document.getElementById("shortMin");
+    const shortSecInput      = document.getElementById("shortSec");
+    const longMinInput       = document.getElementById("longMin");
+    const longSecInput       = document.getElementById("longSec");
+    const longIntervalInput  = document.getElementById("longIntervalInput");
+
+    // ===== Utility =====
+    function formatTime(sec) {
+      sec = Math.max(0, Math.floor(sec));
+      const m = Math.floor(sec / 60);
+      const s = sec % 60;
+      return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+    }
+
+    function updateTimerDisplay() {
+      timerTextEl.textContent = formatTime(remainingSeconds);
+    }
+
+    function updateModeTabs() {
+      modeTabs.forEach(btn => {
+        const key = btn.dataset.mode;
+        const isActive = key === currentModeKey;
+        if (isActive) {
+          btn.classList.remove("bg-white", "border-slate-200", "shadow-none");
+          if (key === "pomodoro") {
+            btn.classList.add(
+              "bg-sky-50",
+              "border-sky-300",
+              "shadow-[0_0_12px_rgba(56,189,248,0.25)]"
+            );
+          } else if (key === "short") {
+            btn.classList.add(
+              "bg-emerald-50",
+              "border-emerald-300",
+              "shadow-[0_0_12px_rgba(16,185,129,0.25)]"
+            );
+          } else {
+            btn.classList.add(
+              "bg-orange-50",
+              "border-orange-300",
+              "shadow-[0_0_12px_rgba(249,115,22,0.25)]"
+            );
+          }
+        } else {
+          btn.classList.remove(
+            "bg-sky-50", "border-sky-300",
+            "bg-emerald-50", "border-emerald-300",
+            "bg-orange-50", "border-orange-300",
+            "shadow-[0_0_12px_rgba(56,189,248,0.25)]",
+            "shadow-[0_0_12px_rgba(16,185,129,0.25)]",
+            "shadow-[0_0_12px_rgba(249,115,22,0.25)]"
+          );
+          btn.classList.add("bg-white", "border-slate-200");
+        }
+      });
+    }
+
+    function updateProgressVisual() {
+      const cfg = modeConfig[currentModeKey];
+      const color = cfg.color;
+      const base = "var(--ring-base)";
+      let ratio = totalSeconds > 0 ? remainingSeconds / totalSeconds : 0;
+      ratio = Math.min(1, Math.max(0, ratio));
+      const progress = 1 - ratio;
+      const deg = progress * 360;
+
+      progressRingEl.style.background =
+        `conic-gradient(${color} ${deg}deg, ${base} ${deg}deg)`;
+
+      // 下の横バー
+      const percent = Math.round(progress * 100);
+      linearProgressEl.style.width = `${percent}%`;
+      progressPercentEl.textContent = `${percent}%`;
+    }
+
+    function updateSessionDots() {
+      sessionDotsEl.innerHTML = "";
+      const maxDots = 10;
+      const count = Math.min(maxDots, dailyTarget || maxDots);
+      for (let i = 0; i < count; i++) {
+        const dot = document.createElement("div");
+        const filled = i < completedPomodoros;
+        dot.className =
+          "w-3 h-3 rounded-full " +
+          (filled
+            ? "bg-sky-400 shadow-[0_0_8px_rgba(56,189,248,0.7)]"
+            : "bg-slate-100 border border-slate-300");
+        sessionDotsEl.appendChild(dot);
+      }
+      sessionsLabelEl.textContent = `今日のポモドーロ：${completedPomodoros}回`;
+      updateDailyProgress();
+    }
+
+    function updateDailyProgress() {
+      let target = dailyTarget;
+      if (!target || target < 1) target = 1;
+      const ratio = Math.min(1, completedPomodoros / target);
+      dailyProgressFill.style.width = `${ratio * 100}%`;
+      dailyProgressText.textContent = `${completedPomodoros} / ${dailyTarget} 達成`;
+    }
+
+    function updateStatusUI() {
+      const cfg = modeConfig[currentModeKey];
+      modeChipLabelEl.textContent = cfg.chipText;
+      statusTextEl.textContent = isRunning ? cfg.runningText : cfg.idleText;
+
+      const nextKey = predictNextMode();
+      if (nextKey) {
+        const mins = Math.floor(durations[nextKey] / 60);
+        nextLabelEl.textContent = `次：${modeConfig[nextKey].name}（${mins}分）`;
+      } else {
+        nextLabelEl.textContent = "";
+      }
+
+      infoHintEl.textContent = `長い休憩：ポモドーロ${longBreakInterval}回ごと`;
+    }
+
+    function predictNextMode() {
+      if (currentModeKey === "pomodoro") {
+        const nextCount = completedPomodoros + 1;
+        if (nextCount > 0 && nextCount % longBreakInterval === 0) {
+          return "long";
+        }
+        return "short";
+      } else {
+        return "pomodoro";
+      }
+    }
+
+    function playBeep() {
+      if (!soundToggle.checked) return;
+      try {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        const ctx = new AudioContext();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+
+        osc.type = "sine";
+        osc.frequency.value = 880;
+        gain.gain.setValueAtTime(0.0, ctx.currentTime);
+        gain.gain.linearRampToValueAtTime(0.3, ctx.currentTime + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.45);
+
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.5);
+      } catch (e) {
+        // 失敗しても何もしない
+      }
+    }
+
+    function pulseTimer() {
+      timerTextEl.classList.remove("tick-pop");
+      void timerTextEl.offsetWidth; // reflow
+      timerTextEl.classList.add("tick-pop");
+    }
+
+    function startTimer() {
+      if (isRunning) return;
+      if (remainingSeconds <= 0) {
+        remainingSeconds = totalSeconds;
+      }
+      isRunning = true;
+      startPauseBtn.textContent = "⏸ 一時停止";
+      if (timerId) clearInterval(timerId);
+      timerId = setInterval(tick, 1000);
+      progressRingEl.classList.add("is-running");
+      updateStatusUI();
+      updateProgressVisual();
+    }
+
+    function pauseTimer() {
+      if (!isRunning) return;
+      isRunning = false;
+      if (timerId) {
+        clearInterval(timerId);
+        timerId = null;
+      }
+      startPauseBtn.textContent = "▶ 再開";
+      progressRingEl.classList.remove("is-running");
+      updateStatusUI();
+      updateProgressVisual();
+    }
+
+    function resetTimer() {
+      pauseTimer();
+      remainingSeconds = totalSeconds;
+      startPauseBtn.textContent = "▶ 開始";
+      updateTimerDisplay();
+      updateProgressVisual();
+      updateStatusUI();
+    }
+
+    function switchMode(newKey, resetRemaining = true) {
+      currentModeKey = newKey;
+      totalSeconds = durations[newKey];
+      if (resetRemaining) {
+        remainingSeconds = totalSeconds;
+      }
+      updateTimerDisplay();
+      updateModeTabs();
+      updateProgressVisual();
+      updateStatusUI();
+    }
+
+    function tick() {
+      if (!isRunning) return;
+      if (remainingSeconds <= 0) {
+        handleFinish(false);
+        return;
+      }
+      remainingSeconds -= 1;
+      updateTimerDisplay();
+      updateProgressVisual();
+      pulseTimer();
+    }
+
+    function handleFinish(skipped) {
+      pauseTimer();
+      if (!skipped) {
+        playBeep();
+      }
+
+      const fromKey = currentModeKey;
+
+      if (fromKey === "pomodoro" && !skipped) {
+        completedPomodoros += 1;
+        updateSessionDots();
+      }
+
+      let nextKey;
+      if (fromKey === "pomodoro") {
+        if (!skipped && completedPomodoros > 0 && completedPomodoros % longBreakInterval === 0) {
+          nextKey = "long";
+        } else {
+          nextKey = "short";
+        }
+      } else {
+        nextKey = "pomodoro";
+      }
+
+      remainingSeconds = 0;
+      updateTimerDisplay();
+      updateProgressVisual();
+
+      switchMode(nextKey, true);
+      startPauseBtn.textContent = "▶ 開始";
+
+      if (autoStartToggle.checked) {
+        startTimer();
+      }
+    }
+
+    function applySettings() {
+      function getDuration(minEl, secEl, defaultMin) {
+        const mins = parseInt(minEl.value, 10);
+        const secs = parseInt(secEl.value, 10);
+        let total = 0;
+        if (!isNaN(mins) && mins >= 0) total += mins * 60;
+        if (!isNaN(secs) && secs >= 0) total += secs;
+        if (total <= 0) total = defaultMin * 60;
+        return total;
+      }
+
+      durations.pomodoro = getDuration(pomodoroMinInput, pomodoroSecInput, 25);
+      durations.short    = getDuration(shortMinInput, shortSecInput, 5);
+      durations.long     = getDuration(longMinInput, longSecInput, 15);
+
+      let interval = parseInt(longIntervalInput.value, 10);
+      if (isNaN(interval) || interval < 1) interval = 1;
+      if (interval > 12) interval = 12;
+      longBreakInterval = interval;
+      longIntervalInput.value = interval;
+
+      totalSeconds = durations[currentModeKey];
+      if (!isRunning) {
+        remainingSeconds = totalSeconds;
+      }
+      updateTimerDisplay();
+      updateProgressVisual();
+      updateStatusUI();
+    }
+
+    function applyDailyTarget() {
+      let target = parseInt(dailyTargetInput.value, 10);
+      if (isNaN(target) || target < 1) target = 1;
+      if (target > 20) target = 20;
+      dailyTarget = target;
+      dailyTargetInput.value = target;
+      updateSessionDots();
+    }
+
+    function updateTaskLabel() {
+      const text = taskInput.value.trim();
+      taskCurrentLabel.textContent = text
+        ? `現在のタスク：${text}`
+        : "現在のタスク：未設定";
+    }
+
+    // ===== イベント =====
+    startPauseBtn.addEventListener("click", () => {
+      if (!isRunning) {
+        startTimer();
+      } else {
+        pauseTimer();
+      }
+    });
+
+    resetBtn.addEventListener("click", () => {
+      resetTimer();
+    });
+
+    skipBtn.addEventListener("click", () => {
+      handleFinish(true);
+    });
+
+    modeTabs.forEach(btn => {
+      btn.addEventListener("click", () => {
+        const key = btn.dataset.mode;
+        if (key === currentModeKey) return;
+        pauseTimer();
+        startPauseBtn.textContent = "▶ 開始";
+        switchMode(key, true);
+      });
+    });
+
+    applySettingsBtn.addEventListener("click", () => {
+      applySettings();
+    });
+
+    dailyTargetInput.addEventListener("change", applyDailyTarget);
+    dailyTargetInput.addEventListener("blur", applyDailyTarget);
+
+    taskInput.addEventListener("input", updateTaskLabel);
+
+    // キーボードショートカット
+    window.addEventListener("keydown", (e) => {
+      if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+      if (e.code === "Space") {
+        e.preventDefault();
+        if (!isRunning) startTimer();
+        else pauseTimer();
+      } else if (e.key.toLowerCase() === "r") {
+        resetTimer();
+      }
+    });
+
+    // ===== 初期化 =====
+    (function init() {
+      updateTimerDisplay();
+      updateModeTabs();
+      updateProgressVisual();
+      updateSessionDots();
+      updateStatusUI();
+      updateTaskLabel();
+      applyDailyTarget();
+    })();
+  </script>
+</body>
+</html>
